@@ -42,82 +42,157 @@ namespace WebVella.Erp.Web.Controllers
 		private const char RELATION_SEPARATOR = '.';
 		private const char RELATION_NAME_RESULT_SEPARATOR = '$';
 
-		RecordManager recMan;
-		EntityManager entMan;
-		EntityRelationManager relMan;
-		SecurityManager secMan;
-		IErpService erpService;
-		IDetectionService _detection;
-		ErpRequestContext erpRequestContext;
+		private RecordManager recordManager;
+		private EntityManager entityManager;
+		private EntityRelationManager entityRelationManager;
+		private SecurityManager securityManager;
+		private IErpService erpService;
+		private IDetectionService detectionService;
+		private ErpRequestContext erpRequestContext;
+
+		private DataSourceManager dataSourceManager;
 
 		public WebApiController([FromServices] IErpService erpService,
 			[FromServices] ErpRequestContext requestContext,
 			[FromServices] IDetectionService detection)
 		{
-			recMan = new RecordManager();
-			secMan = new SecurityManager();
-			entMan = new EntityManager();
-			relMan = new EntityRelationManager();
+			recordManager = new RecordManager();
+
+			securityManager = new SecurityManager();
+
+			entityManager = new EntityManager();
+
+			entityRelationManager = new EntityRelationManager();
+
+			dataSourceManager = new DataSourceManager();
+
 			this.erpService = erpService;
+
 			this.erpRequestContext = requestContext;
-			this._detection = detection;
+
+			this.detectionService = detection;
 		}
 
 		[Route("api/v3/en_US/eql")]
 		[HttpPost]
 		public ActionResult EqlQueryAction([FromBody] EqlQuery model)
 		{
-			ResponseModel response = new ResponseModel();
-			response.Success = true;
-
 			if (model == null)
+			{
 				return NotFound();
+			}
 
 			try
 			{
 				var eqlResult = new EqlCommand(model.Eql, model.Parameters).Execute();
-				response.Object = eqlResult;
+
+				return Ok(GetSuccessResponseModel(eqlResult));
 			}
 			catch (EqlException eqlEx)
 			{
-				response.Success = false;
-				foreach (var eqlError in eqlEx.Errors)
-				{
-					response.Errors.Add(new ErrorModel("eql", "", eqlError.Message));
-				}
-				return Json(response);
+				var errors = eqlEx.Errors.Select(error => new ErrorModel("eql", "", error.Message)).ToList();
+
+				return Ok(GetFailedResponseModel(errors));
 			}
 			catch (Exception ex)
 			{
-				response.Success = false;
-				response.Message = ex.Message;
-				return Json(response);
+				return Ok(GetFailedResponseModel(ex.Message));
 			}
-
-			return Json(response);
 		}
 
 		[Route("api/v3/en_US/eql-ds")]
 		[HttpPost]
-		public ActionResult DataSourceQueryAction([FromBody] JObject submitObj)
+		public ActionResult QueryEqlDataByDataSource([FromBody] JObject requestJson)
 		{
-			ResponseModel response = new ResponseModel();
-			response.Success = true;
-
-
-			if (submitObj == null)
+			if (requestJson == null)
+			{
 				return NotFound();
+			}
 
-			EqlDataSourceQuery model = new EqlDataSourceQuery();
+			try
+			{
+				var queryModel = InitializeEqlQueryModel(requestJson);
 
-			#region << Init SubmitObj >>
+				var dataSource = GetDataSource(queryModel.Name);
+
+				if (dataSource == null)
+				{
+					return Ok(GetFailedResponseModel($"DataSource with name '{queryModel.Name}' not found."));
+				}
+
+				if (dataSource is DatabaseDataSource)
+				{
+					var result = GetDataBaseDataSourceResult(queryModel.Parameters, dataSource.Id);
+
+					return Ok(GetSuccessResponseModel(result));
+				}
+				else if (dataSource is CodeDataSource)
+				{
+					var result = GetCodeDataSourceResult(queryModel.Parameters, dataSource);
+
+					return Ok(GetSuccessResponseModel(result));
+				}
+				else
+				{
+					return Ok(GetFailedResponseModel("DataSource type is not supported."));
+				}
+			}
+			catch (EqlException eqlEx)
+			{
+				var errors = eqlEx.Errors.Select(error => new ErrorModel("eql", "", error.Message)).ToList();
+
+				return Ok(GetFailedResponseModel(errors));
+			}
+			catch (Exception ex)
+			{
+				return Ok(GetFailedResponseModel(ex.Message));
+			}
+		}
+
+		private DataSourceBase GetDataSource(string dataSourceName)
+		{
+			var allDataSources = this.dataSourceManager.GetAll();
+
+			var dataSource = allDataSources.SingleOrDefault(x => x.Name == dataSourceName);
+
+			return dataSource;
+		}
+
+		private ResponseModel GetCodeDataSourceResult(List<EqlParameter> eqlParameters, DataSourceBase dataSource)
+		{
+			var arguments = eqlParameters.ToDictionary(p => p.ParameterName, p => p.Value);
+
+			var resultObject = ((CodeDataSource)dataSource).Execute(arguments);
+
+			return new ResponseModel
+			{
+				Success = true,
+				Object = resultObject
+			};
+		}
+
+		private ResponseModel GetDataBaseDataSourceResult(List<EqlParameter> eqlParameters, Guid dataSourceId)
+		{
+			EntityRecordList list = this.dataSourceManager.Execute(dataSourceId, eqlParameters);
+
+			return new ResponseModel
+			{
+				Success = true,
+				Object = new { list, total_count = list.TotalCount }
+			};
+		}
+
+		private EqlDataSourceQuery InitializeEqlQueryModel(JObject submitObj)
+		{
+			EqlDataSourceQuery queryModel = new EqlDataSourceQuery();
+
 			foreach (var prop in submitObj.Properties())
 			{
 				switch (prop.Name.ToLower())
 				{
 					case "name":
 						if (!string.IsNullOrWhiteSpace(prop.Value.ToString()))
-							model.Name = prop.Value.ToString();
+							queryModel.Name = prop.Value.ToString();
 						else
 						{
 							throw new Exception("DataSource Name is required");
@@ -125,69 +200,19 @@ namespace WebVella.Erp.Web.Controllers
 						break;
 					case "parameters":
 						var jParams = (JArray)prop.Value;
-						model.Parameters = new List<EqlParameter>();
+						queryModel.Parameters = new List<EqlParameter>();
 						foreach (JObject jParam in jParams)
 						{
 							var name = jParam["name"].ToString();
 							var value = jParam["value"].ToString();
 							var eqlParam = new EqlParameter(name, value);
-							model.Parameters.Add(eqlParam);
+							queryModel.Parameters.Add(eqlParam);
 						}
 						break;
 				}
 			}
-			#endregion
 
-
-			try
-			{
-				DataSourceManager dsMan = new DataSourceManager();
-				var dataSources = dsMan.GetAll();
-				var ds = dataSources.SingleOrDefault(x => x.Name == model.Name);
-				if (ds == null)
-				{
-					response.Success = false;
-					response.Message = $"DataSource with name '{model.Name}' not found.";
-					return Json(response);
-				}
-
-				if (ds is DatabaseDataSource)
-				{
-					var list = (EntityRecordList)dsMan.Execute(ds.Id, model.Parameters);
-					response.Object = new { list, total_count = list.TotalCount };
-				}
-				else if (ds is CodeDataSource)
-				{
-					Dictionary<string, object> arguments = new Dictionary<string, object>();
-					foreach (var par in model.Parameters)
-						arguments[par.ParameterName] = par.Value;
-
-					response.Object = ((CodeDataSource)ds).Execute(arguments);
-				}
-				else
-				{
-					response.Success = false;
-					response.Message = $"DataSource type is not supported.";
-					return Json(response);
-				}
-			}
-			catch (EqlException eqlEx)
-			{
-				response.Success = false;
-				foreach (var eqlError in eqlEx.Errors)
-				{
-					response.Errors.Add(new ErrorModel("eql", "", eqlError.Message));
-				}
-				return Json(response);
-			}
-			catch (Exception ex)
-			{
-				response.Success = false;
-				response.Message = ex.Message;
-				return Json(response);
-			}
-
-			return Json(response);
+			return queryModel;
 		}
 
 		[Route("api/v3/en_US/eql-ds-select2")]
@@ -1441,7 +1466,7 @@ namespace WebVella.Erp.Web.Controllers
 		[ResponseCache(NoStore = true, Duration = 0)]
 		public IActionResult GetEntityMetaList(string hash = null)
 		{
-			var bo = entMan.ReadEntities();
+			var bo = entityManager.ReadEntities();
 
 			//check hash and clear data if hash match
 			if (bo.Success && bo.Object != null && !string.IsNullOrWhiteSpace(hash) && bo.Hash == hash)
@@ -1457,7 +1482,7 @@ namespace WebVella.Erp.Web.Controllers
 		[ResponseCache(NoStore = true, Duration = 0)]
 		public IActionResult GetEntityMetaById(Guid entityId)
 		{
-			return DoResponse(entMan.ReadEntity(entityId));
+			return DoResponse(entityManager.ReadEntity(entityId));
 		}
 
 		// Get entity meta
@@ -1467,7 +1492,7 @@ namespace WebVella.Erp.Web.Controllers
 		[ResponseCache(NoStore = true, Duration = 0)]
 		public IActionResult GetEntityMeta(string Name)
 		{
-			return DoResponse(entMan.ReadEntity(Name));
+			return DoResponse(entityManager.ReadEntity(Name));
 		}
 
 
@@ -1489,7 +1514,7 @@ namespace WebVella.Erp.Web.Controllers
 				RecordPermissions = submitObj.RecordPermissions
 			};
 
-			return DoResponse(entMan.CreateEntity(entity));
+			return DoResponse(entityManager.CreateEntity(entity));
 		}
 
 		// Create an entity
@@ -1560,7 +1585,7 @@ namespace WebVella.Erp.Web.Controllers
 				return DoBadRequestResponse(response, "Input object is not in valid format! It cannot be converted.", e);
 			}
 
-			return DoResponse(entMan.UpdateEntity(entity));
+			return DoResponse(entityManager.UpdateEntity(entity));
 		}
 
 
@@ -1577,7 +1602,7 @@ namespace WebVella.Erp.Web.Controllers
 			Guid id = Guid.Empty;
 			if (Guid.TryParse(StringId, out Guid newGuid))
 			{
-				response = entMan.DeleteEntity(newGuid);
+				response = entityManager.DeleteEntity(newGuid);
 			}
 			else
 			{
@@ -1616,7 +1641,7 @@ namespace WebVella.Erp.Web.Controllers
 				return DoBadRequestResponse(response, "Input object is not in valid format! It cannot be converted.", e);
 			}
 
-			return DoResponse(entMan.CreateField(entityId, field));
+			return DoResponse(entityManager.CreateField(entityId, field));
 		}
 
 		[Authorize(Roles = "administrator")]
@@ -1672,7 +1697,7 @@ namespace WebVella.Erp.Web.Controllers
 				return DoBadRequestResponse(response, "Input object is not in valid format! It cannot be converted.", e);
 			}
 
-			return DoResponse(entMan.UpdateField(entityId, field));
+			return DoResponse(entityManager.UpdateField(entityId, field));
 		}
 
 		[Authorize(Roles = "administrator")]
@@ -1978,7 +2003,7 @@ namespace WebVella.Erp.Web.Controllers
 				return DoBadRequestResponse(response, "Input object is not in valid format! It cannot be converted.", e);
 			}
 
-			return DoResponse(entMan.UpdateField(entity, field));
+			return DoResponse(entityManager.UpdateField(entity, field));
 		}
 
 		[Authorize(Roles = "administrator")]
@@ -2000,7 +2025,7 @@ namespace WebVella.Erp.Web.Controllers
 				return DoResponse(response);
 			}
 
-			return DoResponse(entMan.DeleteField(entityId, fieldId));
+			return DoResponse(entityManager.DeleteField(entityId, fieldId));
 		}
 
 		#endregion
@@ -2512,7 +2537,7 @@ namespace WebVella.Erp.Web.Controllers
 
 			EntityQuery query = new EntityQuery(entityName, fields, filterObj, null, null, null);
 
-			QueryResponse result = recMan.Find(query);
+			QueryResponse result = recordManager.Find(query);
 			if (!result.Success)
 				return DoResponse(result);
 
@@ -2532,7 +2557,7 @@ namespace WebVella.Erp.Web.Controllers
 				try
 				{
 					connection.BeginTransaction();
-					result = recMan.DeleteRecord(entityName, recordId);
+					result = recordManager.DeleteRecord(entityName, recordId);
 					connection.CommitTransaction();
 				}
 				catch (Exception ex)
@@ -2564,7 +2589,7 @@ namespace WebVella.Erp.Web.Controllers
 
 			EntityQuery query = new EntityQuery(entityName, "*", filterObj, null, null, null);
 
-			QueryResponse result = recMan.Find(query);
+			QueryResponse result = recordManager.Find(query);
 			if (!result.Success)
 				return DoResponse(result);
 			return Json(result);
@@ -2593,7 +2618,7 @@ namespace WebVella.Erp.Web.Controllers
 				try
 				{
 					connection.BeginTransaction();
-					result = recMan.CreateRecord(entityName, postObj);
+					result = recordManager.CreateRecord(entityName, postObj);
 					connection.CommitTransaction();
 				}
 				catch (Exception ex)
@@ -2622,7 +2647,7 @@ namespace WebVella.Erp.Web.Controllers
 
 			//1.Validate relationName
 			//1.1. Relation exists
-			var relation = relMan.Read().Object.SingleOrDefault(x => x.Name == relationName);
+			var relation = entityRelationManager.Read().Object.SingleOrDefault(x => x.Name == relationName);
 			string targetEntityName = String.Empty;
 			string targetFieldName = String.Empty;
 			var relatedRecord = new EntityRecord();
@@ -2654,12 +2679,12 @@ namespace WebVella.Erp.Web.Controllers
 				{
 					if (relation.OriginEntityName == entityName)
 					{
-						relatedRecordResponse = recMan.Find(new EntityQuery(relation.TargetEntityName, "*", EntityQuery.QueryEQ("id", relatedRecordId)));
+						relatedRecordResponse = recordManager.Find(new EntityQuery(relation.TargetEntityName, "*", EntityQuery.QueryEQ("id", relatedRecordId)));
 						targetFieldName = relation.TargetFieldName;
 					}
 					else
 					{
-						relatedRecordResponse = recMan.Find(new EntityQuery(relation.OriginEntityName, "*", EntityQuery.QueryEQ("id", relatedRecordId)));
+						relatedRecordResponse = recordManager.Find(new EntityQuery(relation.OriginEntityName, "*", EntityQuery.QueryEQ("id", relatedRecordId)));
 						targetFieldName = relation.OriginFieldName;
 					}
 					//2. Validate parentRecordId
@@ -2739,7 +2764,7 @@ namespace WebVella.Erp.Web.Controllers
 						}
 					}
 
-					result = recMan.CreateRecord(entityName, postObj);
+					result = recordManager.CreateRecord(entityName, postObj);
 
 					//Create a relation record if it is N:N
 					if (relation.RelationType == EntityRelationType.ManyToMany)
@@ -2752,12 +2777,12 @@ namespace WebVella.Erp.Web.Controllers
 						else if (relation.TargetEntityName == entityName)
 						{
 							//if current is target -> create relation
-							response = recMan.CreateRelationManyToManyRecord(relation.Id, relatedRecordId, (Guid)postObj["id"]);
+							response = recordManager.CreateRelationManyToManyRecord(relation.Id, relatedRecordId, (Guid)postObj["id"]);
 						}
 						else
 						{
 							//if current is origin -> create relation	
-							response = recMan.CreateRelationManyToManyRecord(relation.Id, (Guid)postObj["id"], relatedRecordId);
+							response = recordManager.CreateRelationManyToManyRecord(relation.Id, (Guid)postObj["id"], relatedRecordId);
 						}
 						if (!response.Success)
 						{
@@ -2814,7 +2839,7 @@ namespace WebVella.Erp.Web.Controllers
 				try
 				{
 					connection.BeginTransaction();
-					result = recMan.UpdateRecord(entityName, postObj);
+					result = recordManager.UpdateRecord(entityName, postObj);
 					connection.CommitTransaction();
 				}
 				catch (Exception ex)
@@ -2856,7 +2881,7 @@ namespace WebVella.Erp.Web.Controllers
 				try
 				{
 					connection.BeginTransaction();
-					result = recMan.UpdateRecord(entityName, postObj);
+					result = recordManager.UpdateRecord(entityName, postObj);
 					connection.CommitTransaction();
 				}
 				catch (Exception ex)
@@ -2957,7 +2982,7 @@ namespace WebVella.Erp.Web.Controllers
 				query = new EntityQuery(entityName, columns, recordsFilterObj, null, null, limit);
 			}
 
-			var queryResponse = recMan.Find(query);
+			var queryResponse = recordManager.Find(query);
 			if (!queryResponse.Success)
 			{
 				response.Message = queryResponse.Message;
@@ -3213,7 +3238,7 @@ namespace WebVella.Erp.Web.Controllers
 
 				if (findType.ToLowerInvariant() == "records" || findType.ToLowerInvariant() == "records-and-count" || findType.ToLowerInvariant() == "records&count")
 				{
-					var matchQueryResponse = recMan.Find(new EntityQuery(entityName, returnFieldsCsv, matchesFilter, sortsList.ToArray(), skipRecords, limitRecords));
+					var matchQueryResponse = recordManager.Find(new EntityQuery(entityName, returnFieldsCsv, matchesFilter, sortsList.ToArray(), skipRecords, limitRecords));
 					if (!matchQueryResponse.Success)
 					{
 						throw new Exception(matchQueryResponse.Message);
@@ -3223,7 +3248,7 @@ namespace WebVella.Erp.Web.Controllers
 
 				if (findType.ToLowerInvariant() == "count" || findType.ToLowerInvariant() == "records-and-count" || findType.ToLowerInvariant() == "records&count")
 				{
-					var matchQueryResponse = recMan.Count(new EntityQuery(entityName, returnFieldsCsv, matchesFilter));
+					var matchQueryResponse = recordManager.Count(new EntityQuery(entityName, returnFieldsCsv, matchesFilter));
 					if (!matchQueryResponse.Success)
 					{
 						throw new Exception(matchQueryResponse.Message);
