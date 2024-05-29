@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using WebVella.Erp.Api;
 using WebVella.Erp.Api.Models.AutoMapper;
@@ -17,6 +18,7 @@ using WebVella.Erp.Web.Middleware;
 using WebVella.Erp.Web.Models;
 using WebVella.Erp.Web.Models.AutoMapper;
 using WebVella.Erp.Web.Services;
+using WebVella.Erp.Web.Services.Abstractions;
 using WebVella.TagHelpers;
 
 namespace WebVella.Erp.Web
@@ -26,7 +28,10 @@ namespace WebVella.Erp.Web
 		public static IServiceCollection AddErp(this IServiceCollection services)
 		{
 			services.AddSingleton<IErpService, ErpService>();
-			services.AddTransient<AuthService>();
+			services.AddTransient<SecurityManager>();
+			services.AddTransient<LogService>();
+			services.AddTransient<JwtSecurityTokenHandler>();
+			services.AddTransient<IAuthService, AuthService>();
 			services.AddScoped<ErpRequestContext>();
 			services.Configure<RazorViewEngineOptions>(options => { options.ViewLocationExpanders.Add(new ErpViewLocationExpander()); });
 			services.ConfigureOptions(typeof(WebConfigurationOptions));
@@ -43,7 +48,8 @@ namespace WebVella.Erp.Web
 				IConfiguration configuration = app.ApplicationServices.GetService<IConfiguration>();
 				IWebHostEnvironment env = app.ApplicationServices.GetService<IWebHostEnvironment>();
 
-				if (!ErpSettings.IsInitialized) {
+				if (!ErpSettings.IsInitialized)
+				{
 					string configPath = "config.json";
 					if (!string.IsNullOrWhiteSpace(configFolder))
 						configPath = System.IO.Path.Combine(configFolder, configPath);

@@ -23,7 +23,7 @@ namespace WebVella.Erp.Web.Models
 			get
 			{
 				if (currentUser == null)
-					currentUser = AuthService.GetUser(User);
+					currentUser = authService.GetUser(User);
 
 				return currentUser;
 			}
@@ -84,6 +84,13 @@ namespace WebVella.Erp.Web.Models
 					hookKey = HttpContext.Request.Query["hookKey"].ToString();
 				return hookKey;
 			}
+		}
+
+		private readonly AuthService authService;
+
+		public BaseErpPageModel(AuthService authService)
+		{
+			this.authService = authService;
 		}
 
 		public IActionResult Init(string appName = "", string areaName = "", string nodeName = "",

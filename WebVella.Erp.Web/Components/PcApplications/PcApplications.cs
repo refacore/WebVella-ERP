@@ -16,9 +16,13 @@ namespace WebVella.Erp.Web.Components
 	{
 		protected ErpRequestContext ErpRequestContext { get; set; }
 
-		public PcApplications([FromServices]ErpRequestContext coreReqCtx)
+		private readonly AuthService authService;
+
+		public PcApplications([FromServices] ErpRequestContext coreReqCtx, [FromServices] AuthService authService)
 		{
 			ErpRequestContext = coreReqCtx;
+
+			this.authService = authService;
 		}
 
 		public class PcApplicationsOptions
@@ -69,26 +73,27 @@ namespace WebVella.Erp.Web.Components
 				ViewBag.AppContext = ErpAppContext.Current;
 				ViewBag.ComponentContext = context;
 
-				if (context.Mode != ComponentMode.Options && context.Mode != ComponentMode.Help) {
-                    var currentUser = AuthService.GetUser(HttpContext.User);
+				if (context.Mode != ComponentMode.Options && context.Mode != ComponentMode.Help)
+				{
+					var currentUser = authService.GetUser(HttpContext.User);
 
-                    var currentUserRoles = currentUser.Roles.Select(x => x.Id);
-                    var apps = new AppService().GetAllApplications().OrderBy(x => x.Weight).ToList();
-                    var allowedApps = new List<App>();
-                    if (apps != null)
-                    {
-                        foreach (var app in apps)
-                        {
-                            if (app.Access == null || app.Access.Count == 0)
-                                continue;
+					var currentUserRoles = currentUser.Roles.Select(x => x.Id);
+					var apps = new AppService().GetAllApplications().OrderBy(x => x.Weight).ToList();
+					var allowedApps = new List<App>();
+					if (apps != null)
+					{
+						foreach (var app in apps)
+						{
+							if (app.Access == null || app.Access.Count == 0)
+								continue;
 
-                            IEnumerable<Guid> accessRoles = app.Access.Intersect(currentUserRoles);
-                            if (accessRoles.Any())
-                                allowedApps.Add(app);
-                        }
-                    }
-                    //Generate Url
-                    foreach (var app in allowedApps)
+							IEnumerable<Guid> accessRoles = app.Access.Intersect(currentUserRoles);
+							if (accessRoles.Any())
+								allowedApps.Add(app);
+						}
+					}
+					//Generate Url
+					foreach (var app in allowedApps)
 					{
 						app.HomePages = app.HomePages.FindAll(x => x.Weight < 1000).OrderBy(x => x.Weight).ToList();
 						foreach (var area in app.Sitemap.Areas)

@@ -6,16 +6,21 @@ using System.Linq;
 using System.Security.Claims;
 using WebVella.Erp.Api;
 using Microsoft.Net.Http.Headers;
+using WebVella.Erp.Web.Services;
 
 namespace WebVella.Erp.Web.Middleware
 {
 	public class JwtMiddleware
 	{
-		private readonly RequestDelegate _next;
+		private readonly RequestDelegate next;
 
-		public JwtMiddleware(RequestDelegate next)
+		private readonly AuthService authService;
+
+		public JwtMiddleware(RequestDelegate next, AuthService authService)
 		{
-			_next = next;
+			this.next = next;
+
+			this.authService = authService;
 		}
 
 		public async Task Invoke(HttpContext context)
@@ -39,7 +44,7 @@ namespace WebVella.Erp.Web.Middleware
 			{
 				try
 				{
-					var jwtToken = await WebVella.Erp.Web.Services.AuthService.GetValidSecurityTokenAsync(token);
+					var jwtToken = await authService.GetValidSecurityTokenAsync(token);
 					if (jwtToken != null && jwtToken.Claims.Any())
 					{
 						var nameIdentifier = jwtToken.Claims.FirstOrDefault(x => x.Type == ClaimTypes.NameIdentifier).Value;
@@ -48,8 +53,8 @@ namespace WebVella.Erp.Web.Middleware
 							var user = new SecurityManager().GetUser(new Guid(nameIdentifier));
 							context.Items["User"] = user;
 
-						   var identity = new ClaimsIdentity(jwtToken.Claims, "jwt");
-						   context.User = new ClaimsPrincipal(identity);
+							var identity = new ClaimsIdentity(jwtToken.Claims, "jwt");
+							context.User = new ClaimsPrincipal(identity);
 						}
 					}
 				}
@@ -61,7 +66,7 @@ namespace WebVella.Erp.Web.Middleware
 
 			}
 
-			await _next(context);
+			await next(context);
 		}
 	}
 }

@@ -11,17 +11,23 @@ namespace WebVella.Erp.Web.Components
 	{
 		protected ErpRequestContext ErpRequestContext { get; set; }
 
-		public UserNavViewComponent([FromServices]ErpRequestContext coreReqCtx)
+		private readonly AuthService authService;
+
+		public UserNavViewComponent([FromServices] ErpRequestContext coreReqCtx, [FromServices] AuthService authService)
 		{
 			ErpRequestContext = coreReqCtx;
+
+			this.authService = authService;
 		}
 
-		public async Task<IViewComponentResult> InvokeAsync( )
+		public async Task<IViewComponentResult> InvokeAsync()
 		{
-			var pageContext = ErpRequestContext.PageContext;
-			ViewBag.CurrentUser = AuthService.GetUser(UserClaimsPrincipal);
+			ViewBag.CurrentUser = authService.GetUser(UserClaimsPrincipal);
+
 			ViewBag.PageId = null;
-			if (ErpRequestContext.Page != null) {
+
+			if (ErpRequestContext.Page != null)
+			{
 				ViewBag.PageId = ErpRequestContext.Page.Id;
 			}
 

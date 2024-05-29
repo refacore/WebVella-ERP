@@ -11,65 +11,84 @@ using WebVella.Erp.Api;
 using WebVella.Erp.Api.Models;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
+using WebVella.Erp.Web.Services.Abstractions;
 
 namespace WebVella.Erp.Web.Services
 {
-	public class AuthService
+	public class AuthService : IAuthService
 	{
 		private const double JWT_TOKEN_EXPIRY_DURATION_MINUTES = 1440;
+
 		private const double JWT_TOKEN_FORCE_REFRESH_MINUTES = 120;
 
-		private IServiceProvider serviceProvider;
+		private readonly IHttpContextAccessor httpContextAccessor;
 
-		public AuthService(IServiceProvider serviceProvider)
+		private readonly SecurityManager securityManager;
+
+		private readonly JwtSecurityTokenHandler tokenHandler;
+
+		public AuthService(
+			IHttpContextAccessor httpContextAccessor
+			, SecurityManager securityManager
+			, JwtSecurityTokenHandler jwtSecurityTokenHandler)
 		{
-			this.serviceProvider = serviceProvider;
+			this.httpContextAccessor = httpContextAccessor;
+
+			this.securityManager = securityManager;
+
+			this.tokenHandler = jwtSecurityTokenHandler;
 		}
 
 		public ErpUser Authenticate(string email, string password)
 		{
-			var user = new SecurityManager().GetUser(email, password);
-			if (user != null && user.Enabled)
+			var user = securityManager.GetUser(email, password);
+
+			if (user == null || !user.Enabled)
 			{
-				var claims = new List<Claim>();
-				claims.Add(new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()));
-				claims.Add(new Claim(ClaimTypes.Email, user.Email));
-				user.Roles.ForEach(role => claims.Add(new Claim(ClaimTypes.Role.ToString(), role.Name)));
-
-				var claimsIdentity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-
-				var authProperties = new AuthenticationProperties
-				{
-					AllowRefresh = true,
-					ExpiresUtc = DateTimeOffset.UtcNow.AddYears(100),
-					IsPersistent = false,
-					IssuedUtc = DateTimeOffset.UtcNow,
-				};
-
-				IHttpContextAccessor httpContextAccesor = (IHttpContextAccessor)serviceProvider.GetService(typeof(IHttpContextAccessor));
-				httpContextAccesor.HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(claimsIdentity), authProperties);
-				return user;
-			}
-			else
 				return null;
+			}
+
+			var claims = InitClaims(user);
+
+			var claimsIdentity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+
+			var authProperties = new AuthenticationProperties
+			{
+				AllowRefresh = true,
+				ExpiresUtc = DateTimeOffset.UtcNow.AddYears(100),
+				IsPersistent = false,
+				IssuedUtc = DateTimeOffset.UtcNow,
+			};
+
+			httpContextAccessor.HttpContext.SignInAsync(
+				  CookieAuthenticationDefaults.AuthenticationScheme
+				, new ClaimsPrincipal(claimsIdentity)
+				, authProperties);
+
+			return user;
 		}
 
 		public void Logout()
 		{
-			IHttpContextAccessor httpContextAccesor = (IHttpContextAccessor)serviceProvider.GetService(typeof(IHttpContextAccessor));
-			httpContextAccesor.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+			httpContextAccessor.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
 		}
 
-		public static ErpUser GetUser(ClaimsPrincipal principal)
+		public ErpUser GetUser(ClaimsPrincipal principal)
 		{
-			if (principal == null || principal.Claims == null || principal.Claims.Count() <= 0)
+			if (principal == null
+				|| principal.Claims == null
+				|| principal.Claims.Count() <= 0)
+			{
 				return null;
+			}
 
 			try
 			{
 				var claims = principal.Claims;
+
 				Guid userId = new Guid(claims.Single(x => x.Type == ClaimTypes.NameIdentifier.ToString()).Value);
-				return new SecurityManager().GetUser(userId);
+
+				return securityManager.GetUser(userId);
 			}
 			catch
 			{
@@ -78,37 +97,47 @@ namespace WebVella.Erp.Web.Services
 			}
 		}
 
-		#region <--- JWT Token related methods --->
-
-		public static async ValueTask<string> GetTokenAsync(string email, string password)
+		public async ValueTask<string> GetTokenAsync(string email, string password)
 		{
-			var user = new SecurityManager().GetUser(email?.Trim()?.ToLowerInvariant(), password?.Trim());
+			var user = securityManager.GetUser(email?.Trim()?.ToLowerInvariant(), password?.Trim());
+
 			if (user != null && user.Enabled)
 			{
 				var (tokenString, token) = await BuildTokenAsync(user);
+
 				return tokenString;
 			}
+
 			throw new Exception("Invalid email or password");
 		}
 
-		public static async ValueTask<string> GetNewTokenAsync(string tokenString)
+		public async ValueTask<string> GetNewTokenAsync(string tokenString)
 		{
 			JwtSecurityToken jwtToken = await GetValidSecurityTokenAsync(tokenString);
+
 			if (jwtToken == null)
+			{
 				return null;
+			}
 
 			List<Claim> claims = jwtToken.Claims.ToList();
+
 			if (claims.Count == 0)
+			{
 				return null;
+			}
 
 			//validate for active user
 			var nameIdentifier = claims.FirstOrDefault(x => x.Type == ClaimTypes.NameIdentifier).Value;
+
 			if (!string.IsNullOrWhiteSpace(nameIdentifier))
 			{
-				var user = new SecurityManager().GetUser(new Guid(nameIdentifier));
+				var user = securityManager.GetUser(new Guid(nameIdentifier));
+
 				if (user is not null && user.Enabled)
 				{
 					var (newTokenString, newToken) = await BuildTokenAsync(user);
+
 					return newTokenString;
 				}
 			}
@@ -116,25 +145,28 @@ namespace WebVella.Erp.Web.Services
 			return null;
 		}
 
-#pragma warning disable 1998
-		public static async ValueTask<JwtSecurityToken> GetValidSecurityTokenAsync(string token)
+		public async ValueTask<JwtSecurityToken> GetValidSecurityTokenAsync(string token)
 		{
 			var mySecret = Encoding.UTF8.GetBytes(ErpSettings.JwtKey);
+
 			var mySecurityKey = new SymmetricSecurityKey(mySecret);
-			var tokenHandler = new JwtSecurityTokenHandler();
+
 			try
 			{
-				tokenHandler.ValidateToken(token,
-				new TokenValidationParameters
-				{
-					ValidateIssuerSigningKey = true,
-					ValidateIssuer = true,
-					ValidateAudience = true,
-					ValidIssuer = ErpSettings.JwtIssuer,
-					ValidAudience = ErpSettings.JwtAudience,
-					IssuerSigningKey = mySecurityKey,
-				}, out SecurityToken validatedToken);
-				return validatedToken as JwtSecurityToken;
+				tokenHandler.ValidateToken(
+					  token
+					, new TokenValidationParameters
+					{
+						ValidateIssuerSigningKey = true,
+						ValidateIssuer = true,
+						ValidateAudience = true,
+						ValidIssuer = ErpSettings.JwtIssuer,
+						ValidAudience = ErpSettings.JwtAudience,
+						IssuerSigningKey = mySecurityKey,
+					}
+					, out SecurityToken validatedToken);
+
+				return await ValueTask.FromResult(validatedToken as JwtSecurityToken);
 			}
 			catch (Exception)
 			{
@@ -142,27 +174,34 @@ namespace WebVella.Erp.Web.Services
 			}
 		}
 
-		private static async ValueTask<(string, JwtSecurityToken)> BuildTokenAsync(ErpUser user)
+		private async ValueTask<(string, JwtSecurityToken)> BuildTokenAsync(ErpUser user)
 		{
-			var claims = new List<Claim>();
-			claims.Add(new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()));
-			claims.Add(new Claim(ClaimTypes.Email, user.Email));
+			var claims = InitClaims(user);
+
+			var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(ErpSettings.JwtKey));
+
+			var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256Signature);
+
+			var tokenDescriptor = new JwtSecurityToken(ErpSettings.JwtIssuer, ErpSettings.JwtAudience, claims,
+						expires: DateTime.Now.AddMinutes(JWT_TOKEN_EXPIRY_DURATION_MINUTES), signingCredentials: credentials);
+
+			return await ValueTask.FromResult((tokenHandler.WriteToken(tokenDescriptor), tokenDescriptor));
+		}
+
+		private static List<Claim> InitClaims(ErpUser user)
+		{
+			var claims = new List<Claim>
+			{
+				new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+				new Claim(ClaimTypes.Email, user.Email)
+			};
+
 			user.Roles.ForEach(role => claims.Add(new Claim(ClaimTypes.Role.ToString(), role.Name)));
 
 			DateTime tokenRefreshAfterDateTime = DateTime.UtcNow.AddMinutes(JWT_TOKEN_FORCE_REFRESH_MINUTES);
+
 			claims.Add(new Claim(type: "token_refresh_after", value: tokenRefreshAfterDateTime.ToBinary().ToString()));
-
-			var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(ErpSettings.JwtKey));
-			var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256Signature);
-			var tokenDescriptor = new JwtSecurityToken(ErpSettings.JwtIssuer, ErpSettings.JwtAudience, claims,
-						expires: DateTime.Now.AddMinutes(JWT_TOKEN_EXPIRY_DURATION_MINUTES), signingCredentials: credentials);
-			return (new JwtSecurityTokenHandler().WriteToken(tokenDescriptor), tokenDescriptor);
+			return claims;
 		}
-#pragma warning restore 1998
-
-
-
-		#endregion
-
 	}
 }

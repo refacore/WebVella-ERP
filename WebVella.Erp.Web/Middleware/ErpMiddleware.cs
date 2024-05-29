@@ -13,11 +13,15 @@ namespace WebVella.Erp.Web.Middleware
 {
 	public class ErpMiddleware
 	{
-		RequestDelegate next;
+		private readonly RequestDelegate next;
 
-		public ErpMiddleware(RequestDelegate next)
+		private readonly AuthService authService;
+
+		public ErpMiddleware(RequestDelegate next, AuthService authService)
 		{
 			this.next = next;
+
+			this.authService = authService;
 		}
 
 		public async Task Invoke(HttpContext context)
@@ -29,7 +33,7 @@ namespace WebVella.Erp.Web.Middleware
 			IDisposable dbCtx = DbContext.CreateContext(ErpSettings.ConnectionString);
 			IDisposable secCtx = null;
 
-			ErpUser user = AuthService.GetUser(context.User);
+			ErpUser user = authService.GetUser(context.User);
 			if (user != null)
 			{
 				secCtx = SecurityContext.OpenScope(user);

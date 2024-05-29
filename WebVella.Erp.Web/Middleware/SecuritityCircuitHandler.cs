@@ -12,19 +12,23 @@ namespace WebVella.Erp.Web.Middleware
 {
 	public class SecuritityCircuitHandler : CircuitHandler
 	{
-		private AuthenticationStateProvider authStateProvider = null;
+		private readonly AuthenticationStateProvider authStateProvider = null;
+
+		private readonly AuthService authService;
 
 		private Dictionary<Circuit, Tuple<IDisposable, IDisposable>> contexts = new Dictionary<Circuit, Tuple<IDisposable, IDisposable>>();
 
-		public SecuritityCircuitHandler(AuthenticationStateProvider authStateProvider)
+		public SecuritityCircuitHandler(AuthenticationStateProvider authStateProvider, AuthService authService)
 		{
 			this.authStateProvider = authStateProvider;
+
+			this.authService = authService;
 		}
 
 		public override Task OnConnectionUpAsync(Circuit circuit, CancellationToken cancellationToken)
 		{
 			IDisposable dbCtx = DbContext.CreateContext(ErpSettings.ConnectionString);
-			ErpUser user = AuthService.GetUser(authStateProvider.GetAuthenticationStateAsync().Result.User);
+			ErpUser user = authService.GetUser(authStateProvider.GetAuthenticationStateAsync().Result.User);
 			IDisposable secCtx = user != null ? WebVella.Erp.Api.SecurityContext.OpenScope(user) : null;
 			contexts.Add(circuit, new Tuple<IDisposable, IDisposable>(dbCtx, secCtx));
 			return Task.CompletedTask;

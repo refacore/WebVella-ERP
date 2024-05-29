@@ -42,35 +42,45 @@ namespace WebVella.Erp.Web.Controllers
 		private const char RELATION_SEPARATOR = '.';
 		private const char RELATION_NAME_RESULT_SEPARATOR = '$';
 
-		private RecordManager recordManager;
-		private EntityManager entityManager;
-		private EntityRelationManager entityRelationManager;
-		private SecurityManager securityManager;
-		private IErpService erpService;
-		private IDetectionService detectionService;
-		private ErpRequestContext erpRequestContext;
+		private readonly RecordManager recordManager;
+		private readonly EntityManager entityManager;
+		private readonly EntityRelationManager entityRelationManager;
+		private readonly SecurityManager securityManager;
+		private readonly IErpService erpService;
+		private readonly IDetectionService detectionService;
+		private readonly ErpRequestContext erpRequestContext;
 
-		private DataSourceManager dataSourceManager;
+		private readonly AuthService authService;
 
-		public WebApiController([FromServices] IErpService erpService,
-			[FromServices] ErpRequestContext requestContext,
-			[FromServices] IDetectionService detection)
+		private readonly DataSourceManager dataSourceManager;
+
+		public WebApiController(IErpService erpService,
+			ErpRequestContext requestContext,
+			IDetectionService detection,
+			RecordManager recordManager,
+			SecurityManager securityManager,
+			EntityManager entityManager,
+			EntityRelationManager entityRelationManager,
+			DataSourceManager dataSourceManager,
+			AuthService authService)
 		{
-			recordManager = new RecordManager();
+			this.recordManager = recordManager;
 
-			securityManager = new SecurityManager();
+			this.securityManager = securityManager;
 
-			entityManager = new EntityManager();
+			this.entityManager = entityManager;
 
-			entityRelationManager = new EntityRelationManager();
+			this.entityRelationManager = entityRelationManager;
 
-			dataSourceManager = new DataSourceManager();
+			this.dataSourceManager = dataSourceManager;
 
 			this.erpService = erpService;
 
 			this.erpRequestContext = requestContext;
 
 			this.detectionService = detection;
+
+			this.authService = authService;
 		}
 
 		[Route("api/v3/en_US/eql")]
@@ -370,7 +380,7 @@ namespace WebVella.Erp.Web.Controllers
 		public ActionResult ToggleSidebarSize()
 		{
 			//TODO: Implement. Should Check the current size in user preferences and toggle in order "","sm","md","lg"
-			var currentUser = AuthService.GetUser(User);
+			var currentUser = authService.GetUser(User);
 			var currentUserPreferences = currentUser.Preferences;
 			var targetSidebarSize = "";
 			switch (currentUserPreferences.SidebarSize)
@@ -414,7 +424,7 @@ namespace WebVella.Erp.Web.Controllers
 
 				var userPreferencesService = new UserPreferencies();
 
-				var currentUser = AuthService.GetUser(User);
+				var currentUser = authService.GetUser(User);
 
 				EntityRecord componentData = userPreferencesService.GetComponentData(currentUser.Id, "WebVella.Erp.Web.Components.PcSection");
 
@@ -657,7 +667,7 @@ namespace WebVella.Erp.Web.Controllers
 
 				var createdNode = pageSrv.GetPageNodeById(newNode.Id);
 
-				var currentUser = AuthService.GetUser(User);
+				var currentUser = authService.GetUser(User);
 				new UserPreferencies().SdkUseComponent(currentUser.Id, newNode.ComponentName);
 
 				return Json(createdNode);
@@ -977,7 +987,7 @@ namespace WebVella.Erp.Web.Controllers
 					}
 
 					//currentUser
-					var currentUser = AuthService.GetUser(User);
+					var currentUser = authService.GetUser(User);
 
 
 					var baseErpPageMode = BaseErpPageModel.CreatePageModelSimulation(
@@ -4179,7 +4189,7 @@ namespace WebVella.Erp.Web.Controllers
 				try
 				{
 
-					var currentUser = AuthService.GetUser(User);
+					var currentUser = authService.GetUser(User);
 
 					foreach (var file in files)
 					{
@@ -4388,49 +4398,6 @@ namespace WebVella.Erp.Web.Controllers
 				response.Message = e.Message + e.StackTrace;
 			}
 
-			return DoResponse(response);
-		}
-
-		#endregion
-
-		#region <=== JWT Token Auth ===>
-
-
-		[AllowAnonymous]
-		[Route("api/v3/en_US/auth/jwt/token")]
-		[HttpPost]
-		public async Task<IActionResult> GetJwtToken([FromBody] JwtTokenLoginModel model)
-		{
-			ResponseModel response = new ResponseModel { Timestamp = DateTime.UtcNow, Success = true, Errors = new List<ErrorModel>() };
-			try
-			{
-				response.Object = await AuthService.GetTokenAsync(model.Email, model.Password);
-			}
-			catch (Exception e)
-			{
-				new LogService().Create(Diagnostics.LogType.Error, "GetJwtToken", e);
-				response.Success = false;
-				response.Message = e.Message + e.StackTrace;
-			}
-			return DoResponse(response);
-		}
-
-		[AllowAnonymous]
-		[Route("api/v3/en_US/auth/jwt/token/refresh")]
-		[HttpPost]
-		public async Task<IActionResult> GetNewJwtToken([FromBody] JwtTokenModel model)
-		{
-			ResponseModel response = new ResponseModel { Timestamp = DateTime.UtcNow, Success = true, Errors = new List<ErrorModel>() };
-			try
-			{
-				response.Object = await AuthService.GetNewTokenAsync(model.Token);
-			}
-			catch (Exception e)
-			{
-				new LogService().Create(Diagnostics.LogType.Error, "GetNewJwtToken", e);
-				response.Success = false;
-				response.Message = e.Message + e.StackTrace;
-			}
 			return DoResponse(response);
 		}
 
